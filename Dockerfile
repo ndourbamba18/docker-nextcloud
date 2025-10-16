@@ -180,9 +180,10 @@ RUN set -ex; \
 COPY omni365-vhost.conf /etc/apache2/sites-available/nextcloud.conf
 RUN a2ensite nextcloud.conf && a2dissite 000-default.conf
 
-COPY *.sh upgrade.exclude /
+COPY entrypoint.sh upgrade.exclude /
 COPY config/* /usr/src/nextcloud/config/
 
 ENTRYPOINT ["/entrypoint.sh"]
 CMD ["apache2-foreground"]
+
 
