@@ -7,8 +7,12 @@ ENV NEXTCLOUD_VERSION=${NEXTCLOUD_VERSION} \
     PHP_MEMORY_LIMIT=512M \
     PHP_UPLOAD_LIMIT=512M \
     OPCACHE_MEMORY_CONSUMPTION=128 \
+    APACHE_RUN_USER=www-data \
+    APACHE_RUN_GROUP=www-data \
     HOME=/var/www/html \
-    DEBIAN_FRONTEND=noninteractive
+    DEBIAN_FRONTEND=noninteractive \
+    OC_USER_ID=1001 \
+    OC_GROUP_ID=0
 
 # Installation des dépendances système
 RUN apt-get update && \
@@ -41,84 +45,56 @@ RUN apt-get update && \
     unzip \
     ca-certificates \
     libmagickcore-6.q16-7-extra \
-    postgresql-client \
-    && apt-get clean \
-    && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
+    postgresql-client && \
+    apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # Installation de Composer
 RUN curl -sS https://getcomposer.org/installer -o /tmp/composer-setup.php && \
     php /tmp/composer-setup.php --install-dir=/usr/local/bin --filename=composer && \
     rm /tmp/composer-setup.php
 
-# Configuration PHP pour Nextcloud
-RUN echo "memory_limit = ${PHP_MEMORY_LIMIT}" > /etc/php/8.3/apache2/conf.d/99-nextcloud.ini && \
-    echo "upload_max_filesize = ${PHP_UPLOAD_LIMIT}" >> /etc/php/8.3/apache2/conf.d/99-nextcloud.ini && \
-    echo "post_max_size = ${PHP_UPLOAD_LIMIT}" >> /etc/php/8.3/apache2/conf.d/99-nextcloud.ini && \
-    echo "max_execution_time = 360" >> /etc/php/8.3/apache2/conf.d/99-nextcloud.ini && \
-    echo "max_input_time = 360" >> /etc/php/8.3/apache2/conf.d/99-nextcloud.ini && \
-    echo "date.timezone = UTC" >> /etc/php/8.3/apache2/conf.d/99-nextcloud.ini && \
-    echo "opcache.enable = 1" >> /etc/php/8.3/apache2/conf.d/99-nextcloud.ini && \
-    echo "opcache.interned_strings_buffer = 16" >> /etc/php/8.3/apache2/conf.d/99-nextcloud.ini && \
-    echo "opcache.max_accelerated_files = 20000" >> /etc/php/8.3/apache2/conf.d/99-nextcloud.ini && \
-    echo "opcache.memory_consumption = ${OPCACHE_MEMORY_CONSUMPTION}" >> /etc/php/8.3/apache2/conf.d/99-nextcloud.ini && \
-    echo "opcache.revalidate_freq = 1" >> /etc/php/8.3/apache2/conf.d/99-nextcloud.ini
+# Configuration PHP
+RUN echo "memory_limit=${PHP_MEMORY_LIMIT}" > /etc/php/8.3/apache2/conf.d/99-nextcloud.ini && \
+    echo "upload_max_filesize=${PHP_UPLOAD_LIMIT}" >> /etc/php/8.3/apache2/conf.d/99-nextcloud.ini && \
+    echo "post_max_size=${PHP_UPLOAD_LIMIT}" >> /etc/php/8.3/apache2/conf.d/99-nextcloud.ini && \
+    echo "max_execution_time=360" >> /etc/php/8.3/apache2/conf.d/99-nextcloud.ini && \
+    echo "max_input_time=360" >> /etc/php/8.3/apache2/conf.d/99-nextcloud.ini && \
+    echo "date.timezone=UTC" >> /etc/php/8.3/apache2/conf.d/99-nextcloud.ini && \
+    echo "opcache.enable=1" >> /etc/php/8.3/apache2/conf.d/99-nextcloud.ini && \
+    echo "opcache.memory_consumption=${OPCACHE_MEMORY_CONSUMPTION}" >> /etc/php/8.3/apache2/conf.d/99-nextcloud.ini
 
-# Même configuration pour PHP CLI
-RUN echo "memory_limit = ${PHP_MEMORY_LIMIT}" > /etc/php/8.3/cli/conf.d/99-nextcloud.ini && \
-    echo "date.timezone = UTC" >> /etc/php/8.3/cli/conf.d/99-nextcloud.ini
+# Clonage de Nextcloud
+RUN git clone --depth 1 --branch ${NEXTCLOUD_VERSION} https://github.com/nextcloud/server.git /tmp/nextcloud && \
+    mv /tmp/nextcloud/* ${HOME}/ && \
+    rm -rf /tmp/nextcloud && \
+    cd ${HOME} && composer install --no-dev --optimize-autoloader --no-interaction
 
-# Clonage et installation de Nextcloud
-RUN git clone https://github.com/nextcloud/server.git ${HOME}-temp && \
-    cd ${HOME}-temp && git checkout ${NEXTCLOUD_VERSION} && cd .. && \
-    cp -r ${HOME}-temp/. ${HOME}/ && \
-    rm -rf ${HOME}-temp && \
-    cd ${HOME} && git submodule update --init && \
-    cd ${HOME} && composer install --no-dev --optimize-autoloader --no-interaction && \
-    rm -rf /tmp/* /var/tmp/* ${HOME}/.cache ${HOME}/.git
-
-# Configuration Apache pour OpenShift
+# Configuration Apache
 RUN a2enmod rewrite headers env dir mime && \
     sed -i 's/Listen 80/Listen 8080/' /etc/apache2/ports.conf && \
     sed -i 's/<VirtualHost \*:80>/<VirtualHost \*:8080>/' /etc/apache2/sites-available/000-default.conf && \
     echo "ServerName localhost" >> /etc/apache2/apache2.conf && \
-    echo "ServerTokens Prod" >> /etc/apache2/apache2.conf && \
-    echo "ServerSignature Off" >> /etc/apache2/apache2.conf && \
-    # Configuration des logs
+    echo "PidFile /tmp/apache2.pid" >> /etc/apache2/apache2.conf && \
     ln -sf /dev/stdout /var/log/apache2/access.log && \
-    ln -sf /dev/stderr /var/log/apache2/error.log && \
-    # Configuration du PID file
-    sed -i 's|^\(PIDFile\)|#\1|' /etc/apache2/apache2.conf && \
-    echo "PidFile /tmp/apache2.pid" >> /etc/apache2/apache2.conf
+    ln -sf /dev/stderr /var/log/apache2/error.log
 
 # VirtualHost Nextcloud
 COPY omni365-vhost.conf /etc/apache2/sites-available/nextcloud.conf
 RUN a2ensite nextcloud.conf && a2dissite 000-default.conf
 
-# Configuration CRITIQUE pour OpenShift - Permissions larges
-RUN mkdir -p ${HOME}/data ${HOME}/config ${HOME}/apps2 /var/www/sessions /var/log/apache2 /var/run/apache2 && \
-    # Donner des permissions complètes à tous les dossiers critiques
-    chmod -R 777 ${HOME} /var/www/sessions /var/log/apache2 /var/run/apache2 && \
-    # S'assurer que Apache peut écrire partout
-    chown -R 1001:0 ${HOME} /var/www /var/log/apache2 /var/run/apache2 && \
-    # Setgid pour conserver les permissions de groupe
-    chmod g+s ${HOME} /var/www/sessions
+# Permissions pour OpenShift
+RUN mkdir -p ${HOME} /var/www/sessions /var/log/apache2 /var/run/apache2 && \
+    chgrp -R 0 ${HOME} /var/www /var/log/apache2 /var/run/apache2 && \
+    chmod -R g=u ${HOME} /var/www /var/log/apache2 /var/run/apache2 && \
+    chmod -R 777 ${HOME} /var/www/sessions /var/log/apache2 /var/run/apache2
 
-# Nettoyage
-RUN apt-get autoremove -y && \
-    apt-get clean && \
-    rm -rf /var/lib/apt/lists/*
-
-# Script d'initialisation
+# Script d’entrée
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
-# Exposition des ports
 EXPOSE 8080
-
-# Volume pour les données persistantes
-VOLUME ["/var/www/html/data", "/var/www/html/config", "/var/www/html/apps2"]
+VOLUME ["/var/www/html"]
 
 WORKDIR ${HOME}
-
 ENTRYPOINT ["/entrypoint.sh"]
 CMD ["apache2ctl", "-D", "FOREGROUND"]
