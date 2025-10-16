@@ -176,8 +176,13 @@ RUN set -ex; \
     apt-get purge -y --auto-remove -o APT::AutoRemove::RecommendsImportant=false $fetchDeps; \
     apt-get dist-clean
 
+# VirtualHost Nextcloud
+COPY omni365-vhost.conf /etc/apache2/sites-available/nextcloud.conf
+RUN a2ensite nextcloud.conf && a2dissite 000-default.conf
+
 COPY *.sh upgrade.exclude /
 COPY config/* /usr/src/nextcloud/config/
 
 ENTRYPOINT ["/entrypoint.sh"]
 CMD ["apache2-foreground"]
+
