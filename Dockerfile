@@ -7,13 +7,8 @@ ENV NEXTCLOUD_VERSION=${NEXTCLOUD_VERSION} \
     PHP_MEMORY_LIMIT=512M \
     PHP_UPLOAD_LIMIT=512M \
     OPCACHE_MEMORY_CONSUMPTION=128 \
-    APACHE_RUN_USER=www-data \
-    APACHE_RUN_GROUP=www-data \
     HOME=/var/www/html \
-    DEBIAN_FRONTEND=noninteractive \
-    # Pour OpenShift
-    OC_USER_ID=1001 \
-    OC_GROUP_ID=0
+    DEBIAN_FRONTEND=noninteractive
 
 # Installation des dépendances système
 RUN apt-get update && \
@@ -99,14 +94,14 @@ RUN a2enmod rewrite headers env dir mime && \
 COPY omni365-vhost.conf /etc/apache2/sites-available/nextcloud.conf
 RUN a2ensite nextcloud.conf && a2dissite 000-default.conf
 
-# Préparation des permissions pour OpenShift
+# Configuration CRITIQUE pour OpenShift - Permissions larges
 RUN mkdir -p ${HOME}/data ${HOME}/config ${HOME}/apps2 /var/www/sessions /var/log/apache2 /var/run/apache2 && \
-    # Configuration des permissions pour permettre à n'importe quel utilisateur d'écrire
-    chgrp -R 0 ${HOME} /var/www /var/log/apache2 /var/run/apache2 && \
-    chmod -R g=u ${HOME} /var/www /var/log/apache2 /var/run/apache2 && \
-    chmod -R 775 ${HOME}/data ${HOME}/config ${HOME}/apps2 /var/www/sessions && \
-    # Apache doit pouvoir écrire dans ces dossiers
-    chmod 777 /var/log/apache2 /var/run/apache2
+    # Donner des permissions complètes à tous les dossiers critiques
+    chmod -R 777 ${HOME} /var/www/sessions /var/log/apache2 /var/run/apache2 && \
+    # S'assurer que Apache peut écrire partout
+    chown -R 1001:0 ${HOME} /var/www /var/log/apache2 /var/run/apache2 && \
+    # Setgid pour conserver les permissions de groupe
+    chmod g+s ${HOME} /var/www/sessions
 
 # Nettoyage
 RUN apt-get autoremove -y && \
